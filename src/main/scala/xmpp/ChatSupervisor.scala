@@ -1,13 +1,19 @@
-package us.troutwine.barkety
+package xmpp
 
 import akka.actor.{Actor,ActorRef}
-import akka.event.{EventHandler => log}
-import akka.config.Supervision.AllForOneStrategy
 import scala.collection.mutable
 import org.jivesoftware.smack.{XMPPConnection,ChatManagerListener,Chat}
 import org.jivesoftware.smack.{MessageListener,Roster,ConnectionConfiguration, PacketListener}
 import org.jivesoftware.smack.packet.{Message,Packet,Presence}
 import org.jivesoftware.smackx.muc.{MultiUserChat,DiscussionHistory}
+import akka.actor.ActorLogging
+import akka.actor.AllForOneStrategy
+import akka.actor.Props
+import java.util.logging.Logging
+import java.util.logging.Logger
+import akka.util.duration._
+import akka.dispatch.Resume
+import akka.dispatch.Resume
 
 private sealed abstract class InternalMessage
 private case class RemoteChatCreated(jid:JID,chat:Chat) extends InternalMessage
@@ -21,12 +27,13 @@ case class OutboundMessage(msg:String) extends Memo
 case class JoinRoom(room: JID, nickname: Option[String] = None, roomPassword: Option[String] = None) extends Memo
 
 private class ChatListener(parent:ActorRef) extends ChatManagerListener {
+  val log = Logger.getAnonymousLogger()
   override def chatCreated(chat:Chat, createdLocally:Boolean) = {
     val jid:JID = JID(chat.getParticipant)
     if (createdLocally)
-      log.info(this,"A local chat with %s was created.".format(jid))
+      log.info("A local chat with %s was created.".format(jid))
     else {
-      log.info(this,"%s has begun to chat with us.".format(jid))
+      log.info("%s has begun to chat with us.".format(jid))
       parent ! RemoteChatCreated(jid, chat)
     }
   }
@@ -40,8 +47,9 @@ private class MsgListener(parent:ActorRef) extends MessageListener {
 }
 
 private class MsgLogger extends MessageListener {
+  val log = Logger.getAnonymousLogger()
   override def processMessage(chat:Chat,msg:Message) = {
-    log.info(this, "INBOUND %s --> %s : %s".format(chat.getParticipant,
+    log.info("INBOUND %s --> %s : %s".format(chat.getParticipant,
                                                    chat.getThreadID,
                                                    msg.getBody))
   }
@@ -100,8 +108,9 @@ class ChatSupervisor(jid:JID, password:String,
                      domain:Option[String] = None,
                      port:Option[Int] = None) extends Actor
 {
-  self.faultHandler = AllForOneStrategy(List(classOf[Throwable]), 5, 5000)
-  self.id = "chatsupervisor:%s".format(jid)
+  override val supervisorStrategy = AllForOneStrategy(5, 5 seconds) {
+    case _ => akka.actor.SupervisorStrategy.Escalate
+  }
 
   private val conf = new ConnectionConfiguration(domain.getOrElse(jid.domain),
                           port.getOrElse(5222), jid.domain)
@@ -123,16 +132,14 @@ class ChatSupervisor(jid:JID, password:String,
       val chat = conn.getChatManager().createChat(partnerJID, msglog)
       if ( !roster.contains(partnerJID) )
         roster.createEntry(partnerJID, partnerJID, null)
-      val chatter = Actor.actorOf(new Chatter(chat, roster)).start
-      self.link(chatter)
-      self.tryReply(chatter)
+      val chatter = context.actorOf(Props(new Chatter(chat, roster)))
+      sender ! chatter
     }
     case RemoteChatCreated(partnerJID,chat) =>
       chats.put(partnerJID,chat)
     case JoinRoom(roomId, nickname, password) => 
-      val roomChatter = Actor.actorOf(new RoomChatter(new MultiUserChat(conn, roomId), nickname.getOrElse(jid.username), password)).start()
-      self.link(roomChatter)
-      self.tryReply(roomChatter)
+      val roomChatter = context.actorOf(Props(new RoomChatter(new MultiUserChat(conn, roomId), nickname.getOrElse(jid.username), password)))
+      sender ! roomChatter
   }
 
   override def postStop = {

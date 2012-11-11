@@ -1,8 +1,10 @@
-package us.troutwine.barkety
+package xmpp
 
 import scala.util.matching.Regex
 
 case class JID(username:String, domain:String, resource:Option[String]) extends Ordered[JID] {
+  import JID._
+  
   override def compare(that:JID) = {
     (that:String) compare (this:String)
   }

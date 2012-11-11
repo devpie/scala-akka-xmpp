@@ -1,11 +1,10 @@
-package us.troutwine.barkety
+package xmpp
 
 import akka.actor._
 import akka.actor.Actor._
-import akka.config.Supervision.AllForOneStrategy
+import akka.actor.AllForOneStrategy
 import scala.util.matching.Regex
 import scala.collection.mutable.Builder
-import akka.event.EventHandler
 
 /**
  * Defines the default [[us.troutwine.barkety.Bot.CommandParser]] implicit, 
@@ -41,11 +40,11 @@ object Bot {
     }
   }
   
-  class RoomBotBuilder(room: ActorRef)(implicit commandParser: CommandParser) {
+  class RoomBotBuilder(context: ActorContext, room: ActorRef)(implicit commandParser: CommandParser) {
     val commands = Map.newBuilder[String, CommandDef]
     
     def result(): ActorRef = { 
-      actorOf(new RoomBot(room, commandsWithHelp()))
+      context.actorOf(Props(new RoomBot(room, commandsWithHelp())))
     }
     
     protected def commandsWithHelp(): Seq[CommandDef] = {
@@ -68,20 +67,25 @@ object Bot {
       })
   }
   
-  def newRoomBot(room: ActorRef)(implicit commandParser: CommandParser): RoomBotBuilder = new RoomBotBuilder(room)
+  def newRoomBot(context: ActorContext, room: ActorRef)
+  	(implicit commandParser: CommandParser): RoomBotBuilder =
+		  new RoomBotBuilder(context, room)
 }
 
-class RoomBot(room: ActorRef, commands: Seq[Bot.CommandDef]) extends Actor {
+class RoomBot(room: ActorRef, commands: Seq[Bot.CommandDef]) extends Actor with ActorLogging {
   import Bot._
   
   // Please accept from me this unpretentious bouquet of very early-blooming parentheses:
-  val noOp: Trigger = { case (room, msg) => EventHandler.debug(this, "room %s, noOp trying to match command %s".format(room, msg)) } 
+  val noOp: Trigger = 
+  	{ case (room, msg) => 
+  	  	log.debug("room %s, noOp trying to match command %s".format(room, msg)) } 
   
   override def preStart() = room ! RegisterParent(self)
   
   def receive = {
-    case InboundMessage(msg) => 
-      EventHandler.debug(this, commands)
+    case InboundMessage(msg) => {
+      log.debug(commands.toString)
       ((commands.map(_.trigger) :+ noOp).reduce(_ orElse _))(room, msg)
+    }
   }
 }
